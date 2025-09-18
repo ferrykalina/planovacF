@@ -64,14 +64,17 @@
         const [bubbles, setBubbles]   = React.useState([]);
         const [spz, setSpz] = React.useState("");
         const [newCountry,setNewCountry] = React.useState("");
-        const [autoRefresh, setAutoRefresh] = React.useState(true);
+        const [autoRefresh, setAutoRefresh] = React.useState(true); // default zapnuto
 
-        // Ochrany proti závodu + dirty flag
-        const lastLocalChangeRef = React.useRef(0);
-        const lastServerStampRef = React.useRef(0);
-        const dirtyRef = React.useRef(false);
+        // --- Ochrany proti přepsání + dirty/union ---
+        const lastLocalChangeRef = React.useRef(0);   // čas poslední lokální změny
+        const lastServerStampRef = React.useRef(0);   // poslední použité updated_at ze serveru
+        const dirtyRef = React.useRef(false);         // zda máme neodeslané lokální změny
+        const suppressPullUntilRef = React.useRef(0); // do tohoto času ignoruj pull
+        const localNewIdsRef = React.useRef(new Map()); // Map<id, timestamp> nově přidaných SPZ
+        const LOCAL_KEEP_MS = 10000; // 10 s držet lokální novinky (union), než je server vrátí
 
-        const touchLocal = () => { lastLocalChangeRef.current = Date.now(); dirtyRef.current = true; };
+        const touchLocal = () => { lastLocalChangeRef.current = Date.now(); dirtyRef.current = true; suppressPullUntilRef.current = Date.now() + 1200; };
 
         const byCol = React.useMemo(()=>{
           const map = Object.fromEntries(countries.map(c=>[c,[]]));
@@ -79,50 +82,76 @@
           return map;
         },[countries,bubbles]);
 
-        // PULL (no-cache + ochrana)
+        // --- PULL (no-cache + union + potlačení po lokální změně/pushi) ---
         const pull = async (wid) => {
           try {
-            if (Date.now() - lastLocalChangeRef.current < 1500) return; // nedávná lokální změna → nepřepisuj
+            const now = Date.now();
+            if (now < suppressPullUntilRef.current) return; // dočasně potlačeno
+            if (now - lastLocalChangeRef.current < 1200) return; // těsně po lokální změně nepřepisuj
+
             const url = `/api/planovac/${encodeURIComponent(wid)}?t=${Date.now()}`;
             const r = await fetch(url, { cache:'no-store', headers: { 'Cache-Control':'no-cache', 'Pragma':'no-cache' } });
             if(!r.ok){ console.error("GET", r.status); return; }
             const data = await r.json();
+
             const stamp = data && data.updated_at ? Date.parse(data.updated_at) : 0;
-            if (stamp && stamp < lastServerStampRef.current) return; // server poslal starší verzi → ignoruj
-            if(Array.isArray(data.countries)) setCountries(data.countries);
-            if(Array.isArray(data.bubbles))   setBubbles(data.bubbles);
+            if (stamp && stamp < lastServerStampRef.current) return; // server posílá starší verzi → ignoruj
+
+            let serverCountries = Array.isArray(data.countries) ? data.countries : countries;
+            let serverBubbles   = Array.isArray(data.bubbles)   ? data.bubbles   : [];
+
+            // vyházej prošlé lokální novinky
+            for (const [id, t] of Array.from(localNewIdsRef.current.entries())) {
+              if (Date.now() - t > LOCAL_KEEP_MS) localNewIdsRef.current.delete(id);
+            }
+            const srvMap = new Map(serverBubbles.map(b => [b.id, b]));
+            const keepLocals = [];
+            for (const [id] of localNewIdsRef.current.entries()) {
+              if (!srvMap.has(id)) {
+                const lb = bubbles.find(b => b.id === id);
+                if (lb) keepLocals.push(lb);
+              }
+            }
+            const mergedBubbles = keepLocals.length ? [...serverBubbles, ...keepLocals] : serverBubbles;
+
+            setCountries(serverCountries);
+            setBubbles(mergedBubbles);
             if (stamp) lastServerStampRef.current = stamp;
-            // důležité: pull NEMĚNÍ dirtyRef (pull nemá spouštět push)
           } catch(e){ console.error("GET failed", e); }
         };
 
-        // PUSH (jen když je dirty)
+        // --- PUSH (jen když je dirty) ---
         const push = async (wid, payload) => {
           try {
-            if (!dirtyRef.current) return; // nic se lokálně neměnilo → neposílej
+            if (!dirtyRef.current) return;
+            // po pushi na chvíli potlač pull, aby nestihl přepsat
+            suppressPullUntilRef.current = Date.now() + 1500;
+
             const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
               method:'POST',
               headers:{'Content-Type':'application/json; charset=utf-8'},
               body: JSON.stringify(payload)
             });
             if(!r.ok) { console.error("POST", r.status); return; }
-            dirtyRef.current = false; // úspěšně zapsáno
-            await pull(wid);          // hned načti nejnovější serverová data
+            dirtyRef.current = false;
+            // krátké zpoždění a pak načíst (server už by měl mít novou verzi)
+            setTimeout(()=>pull(wid), 250);
           } catch(e){ console.error("POST failed", e); }
         };
 
         // start: načti při změně workspace
         React.useEffect(()=>{ pull(workspace); },[workspace]);
 
-        // polling: 3 s (pro sdílení mezi okny)
+        // polling: jen když je zapnutý
         React.useEffect(()=>{
           if(!autoRefresh) return;
           const id = setInterval(()=>pull(workspace), 3000);
           return ()=>clearInterval(id);
         },[workspace,autoRefresh]);
 
-        // refresh při návratu/scrollu
+        // eventy (focus/visibility/scroll) jen když je autoRefresh zapnutý
         React.useEffect(()=>{
+          if(!autoRefresh) return;
           const onFocus = ()=>pull(workspace);
           const onVisible = ()=>{ if(document.visibilityState==='visible') pull(workspace); };
           const onScroll = ()=>pull(workspace);
@@ -134,23 +163,47 @@
             document.removeEventListener('visibilitychange', onVisible);
             window.removeEventListener('scroll', onScroll);
           };
-        },[workspace]);
+        },[workspace,autoRefresh]);
 
-        // autosave (debounce 300 ms) – PUSH jen když je dirty
+        // autosave (debounce 300 ms) – po změně pošli, jinak nic
         React.useEffect(()=>{
           const t = setTimeout(()=>push(workspace, { countries, bubbles }), 300);
           return ()=>clearTimeout(t);
         },[countries,bubbles,workspace]);
 
-        // Mutátory – všechny označí dirty
+        // --- Mutátory (všechny označí dirty) ---
         const addSpz = () => {
           const label = (spz||"").trim();
           if(!label) return;
           const id = "spz-" + Math.random().toString(36).slice(2,8);
+          const newBubble = { id, label, type:'spz', column: countries[0]||"CZ", day:"", note:"" };
+
+          // zaznamenej lokální změnu a novinku
           touchLocal();
-          setBubbles(prev => [...prev, { id, label, type:'spz', column: countries[0]||"CZ", day:"", note:"" }]);
+          localNewIdsRef.current.set(id, Date.now());
+
+          // lokálně přidej
+          const next = [...bubbles, newBubble];
+          setBubbles(next);
           setSpz("");
+
+          // OKAMŽITÝ push s novým polem
+          (async ()=>{
+            try {
+              suppressPullUntilRef.current = Date.now() + 1500;
+              await fetch(`/api/planovac/${encodeURIComponent(workspace)}`, {
+                method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'},
+                body: JSON.stringify({ countries, bubbles: next })
+              });
+            } catch(e) {
+              console.error("POST addSpz failed", e);
+            } finally {
+              dirtyRef.current = false;
+              setTimeout(()=>pull(workspace), 250);
+            }
+          })();
         };
+
         const addCountry = () => {
           const code = (newCountry||"").trim().toUpperCase();
           if(!code) return;
@@ -159,6 +212,7 @@
           setCountries(prev => [...prev, code]);
           setNewCountry("");
         };
+
         const onChangeNote = (id, text) => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,note:text}:b)); };
         const onChangeDay  = (id, day)  => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:day}:b)); };
         const onDeleteDay  = (id)       => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:""}:b)); };
@@ -173,7 +227,7 @@
           <div className="wrap">
             <header style={{textAlign:'center', marginBottom:12}}>
               <h1>Plánovač</h1>
-              <small>Sdílej stejný odkaz se stejným <code>?w=...</code>. Změny se propsíší každé 3 s.</small>
+              <small>Sdílej stejný odkaz se stejným <code>?w=...</code>. Změny se propsíší bezpečně (bez miznutí).</small>
             </header>
 
             <div className="toolbar">
@@ -223,8 +277,8 @@
 
             <div style={{marginTop:16}}>
               <small>🧭 Přidej SPZ, vyber den v bublině, připiš poznámku. Přetáhni do správného státu.  
-              🔗 Používejte stejný <code>?w=…</code>.  
-              ⏱️ Sync: polling 3 s, anti-cache, dirty-push (bez přepisování).</small>
+              🔗 Používejte stejné <code>?w=…</code>.  
+              🛡️ Zápis je okamžitý, pull je chráněný a dělá union → bubliny už „nemizí“.</small>
             </div>
           </div>
         );
