@@ -1,284 +1,248 @@
 <!doctype html>
 <html lang="cs">
   <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta charset="utf-8" />
     <title>Plánovač</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7fb;margin:0;padding:24px;}
-      .wrap{max-width:1200px;margin:0 auto}
-      .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-      .cols{display:grid;grid-template-columns:repeat(1,minmax(0,1fr));gap:12px}
-      @media(min-width:900px){.cols{grid-template-columns:repeat(7,minmax(0,1fr))}}
-      .col{min-height:280px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:12px}
-      .col h3{margin:4px 0 8px;text-align:center}
-      .bubble{border:1px solid #e5e7eb;background:#fff;border-radius:14px;padding:8px 10px;margin:8px 0}
-      .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-      input[type=text], select{border:1px solid #cbd5e1;border-radius:8px;padding:6px 8px;font-size:12px}
-      button{border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:8px 10px;cursor:pointer}
-      button:hover{background:#f8fafc}
-      .note{width:100%}
-      small{color:#64748b}
-      .toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:center;margin:8px 0 16px}
-      .grid{display:grid;grid-template-columns:1fr;gap:12px}
-      @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
-      .draggable{cursor:grab}
-    </style>
-    <!-- React + ReactDOM + Babel -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script crossorigin src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
-  <body>
-    <div class="wrap" id="root"></div>
+  <body class="bg-slate-100">
+    <div id="root"></div>
 
     <script type="text/babel">
-      const DAY_LABELS = ["Po","Út","St","Čt","Pá","So","Ne"];
+      const { useState, useEffect, useMemo, useRef } = React;
 
-      function Bubble({b,onChangeNote,onChangeDay,onDeleteDay,onDragStart}) {
+      const DAY_LABELS = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
+
+      function Bubble({ b, onChangeDay, onChangeNote, onDeleteDay }) {
         return (
-          <div className="bubble draggable" draggable onDragStart={(e)=>onDragStart(e,b.id)} title="Poznámka jde dvojklikem označit a přepsat">
-            <div className="row">
-              <small>SPZ</small><strong>{b.label}</strong>
-              <select value={b.day || ""} onChange={(e)=>onChangeDay(b.id, e.target.value || "")}>
-                <option value="" disabled>Den</option>
-                {DAY_LABELS.map(d => <option key={d} value={d}>{d}</option>)}
+          <div className="bg-white rounded-xl shadow p-2 flex flex-col gap-1 select-none">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold">{b.label}</span>
+              <select
+                value={b.day || ""}
+                onChange={(e) => onChangeDay(b.id, e.target.value)}
+                className="border rounded px-1 text-xs"
+              >
+                <option value="">Den</option>
+                {DAY_LABELS.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
               </select>
-              {b.day ? <button onClick={()=>onDeleteDay(b.id)}>×</button> : null}
+              {b.day && (
+                <button
+                  onClick={() => onDeleteDay(b.id)}
+                  className="text-red-500 text-xs ml-1"
+                >
+                  ✕
+                </button>
+              )}
             </div>
-            <div className="row" style={{marginTop:6}}>
-              <input className="note" type="text" value={b.note || ""} placeholder="Poznámka…"
-                     onFocus={(e)=>e.target.select()} onChange={(e)=>onChangeNote(b.id,e.target.value)} />
-            </div>
+            <input
+              value={b.note || ""}
+              onChange={(e) => onChangeNote(b.id, e.target.value)}
+              onFocus={(e) => e.target.select()}
+              placeholder="Poznámka…"
+              className="border rounded px-1 text-xs"
+            />
           </div>
         );
       }
 
-      function App(){
-        const urlParams = new URLSearchParams(location.search);
-        const initialW = urlParams.get("w") || "public-demo";
+      function CountryColumn({ code, children, onDrop }) {
+        return (
+          <div
+            className="bg-white/70 backdrop-blur border rounded-2xl p-2 min-h-[200px]"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => onDrop(e, code)}
+          >
+            <div className="font-bold mb-2 text-center">{code}</div>
+            <div className="flex flex-col gap-2">{children}</div>
+          </div>
+        );
+      }
 
-        const [workspace, setWorkspace] = React.useState(initialW);
-        const [countries, setCountries] = React.useState(["CZ","DE","FR","IT","ES","NL","BE"]);
-        const [bubbles, setBubbles]   = React.useState([]);
-        const [spz, setSpz] = React.useState("");
-        const [newCountry,setNewCountry] = React.useState("");
-        const [autoRefresh, setAutoRefresh] = React.useState(true); // default zapnuto
+      function App() {
+        const [countries, setCountries] = useState([
+          "CZ",
+          "DE",
+          "FR",
+          "IT",
+          "ES",
+          "NL",
+          "BE",
+        ]);
+        const [bubbles, setBubbles] = useState([]);
+        const [spz, setSpz] = useState("");
+        const [workspace, setWorkspace] = useState("public-demo");
 
-        // --- Ochrany proti přepsání + dirty/union ---
-        const lastLocalChangeRef = React.useRef(0);   // čas poslední lokální změny
-        const lastServerStampRef = React.useRef(0);   // poslední použité updated_at ze serveru
-        const dirtyRef = React.useRef(false);         // zda máme neodeslané lokální změny
-        const suppressPullUntilRef = React.useRef(0); // do tohoto času ignoruj pull
-        const localNewIdsRef = React.useRef(new Map()); // Map<id, timestamp> nově přidaných SPZ
-        const LOCAL_KEEP_MS = 10000; // 10 s držet lokální novinky (union), než je server vrátí
+        const lastServerStampRef = useRef(0);
+        const lastLocalChangeRef = useRef(0);
 
-        const touchLocal = () => { lastLocalChangeRef.current = Date.now(); dirtyRef.current = true; suppressPullUntilRef.current = Date.now() + 1200; };
+        const touchLocal = () => {
+          lastLocalChangeRef.current = Date.now();
+        };
 
-        const byCol = React.useMemo(()=>{
-          const map = Object.fromEntries(countries.map(c=>[c,[]]));
-          for(const b of bubbles){ (map[b.column]||(map[b.column]=[])).push(b); }
-          return map;
-        },[countries,bubbles]);
-
-        // --- PULL (no-cache + union + potlačení po lokální změně/pushi) ---
+        // --- PULL s unionem ---
         const pull = async (wid) => {
           try {
-            const now = Date.now();
-            if (now < suppressPullUntilRef.current) return; // dočasně potlačeno
-            if (now - lastLocalChangeRef.current < 1200) return; // těsně po lokální změně nepřepisuj
-
             const url = `/api/planovac/${encodeURIComponent(wid)}?t=${Date.now()}`;
-            const r = await fetch(url, { cache:'no-store', headers: { 'Cache-Control':'no-cache', 'Pragma':'no-cache' } });
-            if(!r.ok){ console.error("GET", r.status); return; }
+            const r = await fetch(url, {
+              cache: "no-store",
+              headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+            });
+            if (!r.ok) return;
             const data = await r.json();
+            const serverCountries = Array.isArray(data.countries)
+              ? data.countries
+              : countries;
+            const serverBubbles = Array.isArray(data.bubbles)
+              ? data.bubbles
+              : [];
 
-            const stamp = data && data.updated_at ? Date.parse(data.updated_at) : 0;
-            if (stamp && stamp < lastServerStampRef.current) return; // server posílá starší verzi → ignoruj
-
-            let serverCountries = Array.isArray(data.countries) ? data.countries : countries;
-            let serverBubbles   = Array.isArray(data.bubbles)   ? data.bubbles   : [];
-
-            // vyházej prošlé lokální novinky
-            for (const [id, t] of Array.from(localNewIdsRef.current.entries())) {
-              if (Date.now() - t > LOCAL_KEEP_MS) localNewIdsRef.current.delete(id);
-            }
-            const srvMap = new Map(serverBubbles.map(b => [b.id, b]));
-            const keepLocals = [];
-            for (const [id] of localNewIdsRef.current.entries()) {
-              if (!srvMap.has(id)) {
-                const lb = bubbles.find(b => b.id === id);
-                if (lb) keepLocals.push(lb);
-              }
-            }
-            const mergedBubbles = keepLocals.length ? [...serverBubbles, ...keepLocals] : serverBubbles;
+            // --- union server + local ---
+            const srvMap = new Map(serverBubbles.map((b) => [b.id, b]));
+            const localOnly = bubbles.filter((b) => !srvMap.has(b.id));
+            const mergedBubbles = [...serverBubbles, ...localOnly];
 
             setCountries(serverCountries);
             setBubbles(mergedBubbles);
-            if (stamp) lastServerStampRef.current = stamp;
-          } catch(e){ console.error("GET failed", e); }
+
+            if (data && data.updated_at) {
+              const stamp = Date.parse(data.updated_at);
+              if (!Number.isNaN(stamp)) lastServerStampRef.current = stamp;
+            }
+          } catch (e) {
+            console.error("GET failed", e);
+          }
         };
 
-        // --- PUSH (jen když je dirty) ---
+        // --- PUSH ---
         const push = async (wid, payload) => {
           try {
-            if (!dirtyRef.current) return;
-            // po pushi na chvíli potlač pull, aby nestihl přepsat
-            suppressPullUntilRef.current = Date.now() + 1500;
-
-            const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
-              method:'POST',
-              headers:{'Content-Type':'application/json; charset=utf-8'},
-              body: JSON.stringify(payload)
+            await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json; charset=utf-8",
+              },
+              body: JSON.stringify(payload),
             });
-            if(!r.ok) { console.error("POST", r.status); return; }
-            dirtyRef.current = false;
-            // krátké zpoždění a pak načíst (server už by měl mít novou verzi)
-            setTimeout(()=>pull(wid), 250);
-          } catch(e){ console.error("POST failed", e); }
+          } catch (e) {
+            console.error("POST failed", e);
+          }
         };
 
-        // start: načti při změně workspace
-        React.useEffect(()=>{ pull(workspace); },[workspace]);
+        // auto-pull každé 3 s
+        useEffect(() => {
+          pull(workspace);
+          const iv = setInterval(() => pull(workspace), 3000);
+          return () => clearInterval(iv);
+        }, [workspace]);
 
-        // polling: jen když je zapnutý
-        React.useEffect(()=>{
-          if(!autoRefresh) return;
-          const id = setInterval(()=>pull(workspace), 3000);
-          return ()=>clearInterval(id);
-        },[workspace,autoRefresh]);
+        // auto-push při změnách
+        useEffect(() => {
+          if (!bubbles.length) return;
+          const t = setTimeout(() => {
+            push(workspace, { countries, bubbles });
+          }, 500);
+          return () => clearTimeout(t);
+        }, [countries, bubbles, workspace]);
 
-        // eventy (focus/visibility/scroll) jen když je autoRefresh zapnutý
-        React.useEffect(()=>{
-          if(!autoRefresh) return;
-          const onFocus = ()=>pull(workspace);
-          const onVisible = ()=>{ if(document.visibilityState==='visible') pull(workspace); };
-          const onScroll = ()=>pull(workspace);
-          window.addEventListener('focus', onFocus);
-          document.addEventListener('visibilitychange', onVisible);
-          window.addEventListener('scroll', onScroll, { passive:true });
-          return ()=>{
-            window.removeEventListener('focus', onFocus);
-            document.removeEventListener('visibilitychange', onVisible);
-            window.removeEventListener('scroll', onScroll);
-          };
-        },[workspace,autoRefresh]);
-
-        // autosave (debounce 300 ms) – po změně pošli, jinak nic
-        React.useEffect(()=>{
-          const t = setTimeout(()=>push(workspace, { countries, bubbles }), 300);
-          return ()=>clearTimeout(t);
-        },[countries,bubbles,workspace]);
-
-        // --- Mutátory (všechny označí dirty) ---
         const addSpz = () => {
-          const label = (spz||"").trim();
-          if(!label) return;
-          const id = "spz-" + Math.random().toString(36).slice(2,8);
-          const newBubble = { id, label, type:'spz', column: countries[0]||"CZ", day:"", note:"" };
-
-          // zaznamenej lokální změnu a novinku
-          touchLocal();
-          localNewIdsRef.current.set(id, Date.now());
-
-          // lokálně přidej
-          const next = [...bubbles, newBubble];
-          setBubbles(next);
+          const label = spz.trim();
+          if (!label) return;
+          const id = "spz-" + Math.random().toString(36).slice(2, 8);
+          const newBubble = {
+            id,
+            label,
+            type: "spz",
+            column: countries[0],
+            day: "",
+            note: "",
+          };
+          setBubbles((prev) => [...prev, newBubble]);
           setSpz("");
-
-          // OKAMŽITÝ push s novým polem
-          (async ()=>{
-            try {
-              suppressPullUntilRef.current = Date.now() + 1500;
-              await fetch(`/api/planovac/${encodeURIComponent(workspace)}`, {
-                method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'},
-                body: JSON.stringify({ countries, bubbles: next })
-              });
-            } catch(e) {
-              console.error("POST addSpz failed", e);
-            } finally {
-              dirtyRef.current = false;
-              setTimeout(()=>pull(workspace), 250);
-            }
-          })();
+          push(workspace, { countries, bubbles: [...bubbles, newBubble] });
         };
 
-        const addCountry = () => {
-          const code = (newCountry||"").trim().toUpperCase();
-          if(!code) return;
-          if(countries.includes(code)){ setNewCountry(""); return; }
+        const updateDay = (id, day) => {
           touchLocal();
-          setCountries(prev => [...prev, code]);
-          setNewCountry("");
+          setBubbles((prev) =>
+            prev.map((b) => (b.id === id ? { ...b, day } : b))
+          );
+        };
+        const deleteDay = (id) => {
+          touchLocal();
+          setBubbles((prev) =>
+            prev.map((b) => (b.id === id ? { ...b, day: "" } : b))
+          );
+        };
+        const updateNote = (id, note) => {
+          touchLocal();
+          setBubbles((prev) =>
+            prev.map((b) => (b.id === id ? { ...b, note } : b))
+          );
         };
 
-        const onChangeNote = (id, text) => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,note:text}:b)); };
-        const onChangeDay  = (id, day)  => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:day}:b)); };
-        const onDeleteDay  = (id)       => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:""}:b)); };
-        const onDragStart  = (e, id)    => e.dataTransfer.setData("text/plain", id);
-        const onDropTo     = (e, code)  => {
-          const id = e.dataTransfer.getData("text/plain"); if(!id) return;
-          touchLocal();
-          setBubbles(prev => prev.map(b=>b.id===id?{...b,column:code}:b));
+        const moveToColumn = (e, code) => {
+          const id = e.dataTransfer.getData("text/plain");
+          if (!id) return;
+          setBubbles((prev) =>
+            prev.map((b) => (b.id === id ? { ...b, column: code } : b))
+          );
         };
+
+        const byColumn = useMemo(() => {
+          const map = Object.fromEntries(countries.map((c) => [c, []]));
+          bubbles.forEach((b) => {
+            if (!map[b.column]) map[b.column] = [];
+            map[b.column].push(b);
+          });
+          return map;
+        }, [bubbles, countries]);
 
         return (
-          <div className="wrap">
-            <header style={{textAlign:'center', marginBottom:12}}>
-              <h1>Plánovač</h1>
-              <small>Sdílej stejný odkaz se stejným <code>?w=...</code>. Změny se propsíší bezpečně (bez miznutí).</small>
-            </header>
-
-            <div className="toolbar">
-              <label>Pracovní prostor (ID):
-                <input type="text" value={workspace} onChange={e=>setWorkspace(e.target.value.trim()||"public-demo")} style={{marginLeft:6}} />
-              </label>
-              <label style={{display:'inline-flex',alignItems:'center',gap:6}}>
-                <input type="checkbox" checked={autoRefresh} onChange={e=>setAutoRefresh(e.target.checked)} />
-                Auto-refresh 3 s
-              </label>
+          <div className="p-4 max-w-6xl mx-auto">
+            <h1 className="text-2xl font-bold text-center mb-4">Plánovač</h1>
+            <div className="flex gap-2 mb-4">
+              <input
+                value={spz}
+                onChange={(e) => setSpz(e.target.value)}
+                placeholder="Zadej SPZ"
+                className="border rounded px-2 py-1 flex-1"
+              />
+              <button
+                onClick={addSpz}
+                className="border rounded px-3 py-1 bg-slate-50"
+              >
+                Přidat SPZ
+              </button>
             </div>
-
-            <div className="grid">
-              <div className="card">
-                <div style={{fontWeight:600, marginBottom:8}}>Přidat SPZ</div>
-                <div className="row">
-                  <input type="text" value={spz} onChange={e=>setSpz(e.target.value)} placeholder="SPZ (písmena i čísla)" />
-                  <button onClick={addSpz}>Přidat SPZ</button>
-                </div>
-              </div>
-
-              <div className="card">
-                <div style={{fontWeight:600, marginBottom:8}}>Přidat stát (sloupec)</div>
-                <div className="row">
-                  <input type="text" value={newCountry} onChange={e=>setNewCountry(e.target.value.toUpperCase())} placeholder="Např. PL, AT, SK" />
-                  <button onClick={addCountry}>Přidat stát</button>
-                </div>
-                <small>Sloupec pro přesouvání SPZ (dvoupísmenná zkratka).</small>
-              </div>
-            </div>
-
-            <div className="cols" style={{marginTop:16}}>
-              {countries.map(code => (
-                <div key={code} className="col" onDragOver={e=>e.preventDefault()} onDrop={(e)=>onDropTo(e, code)}>
-                  <h3>{code}</h3>
-                  {(byCol[code]||[]).map(b => (
-                    <Bubble key={b.id} b={b}
-                      onChangeNote={onChangeNote}
-                      onChangeDay={onChangeDay}
-                      onDeleteDay={onDeleteDay}
-                      onDragStart={onDragStart}
-                    />
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+              {countries.map((c) => (
+                <CountryColumn key={c} code={c} onDrop={moveToColumn}>
+                  {byColumn[c].map((b) => (
+                    <div
+                      key={b.id}
+                      draggable
+                      onDragStart={(e) =>
+                        e.dataTransfer.setData("text/plain", b.id)
+                      }
+                    >
+                      <Bubble
+                        b={b}
+                        onChangeDay={updateDay}
+                        onChangeNote={updateNote}
+                        onDeleteDay={deleteDay}
+                      />
+                    </div>
                   ))}
-                </div>
+                </CountryColumn>
               ))}
-            </div>
-
-            <div style={{marginTop:16}}>
-              <small>🧭 Přidej SPZ, vyber den v bublině, připiš poznámku. Přetáhni do správného státu.  
-              🔗 Používejte stejné <code>?w=…</code>.  
-              🛡️ Zápis je okamžitý, pull je chráněný a dělá union → bubliny už „nemizí“.</small>
             </div>
           </div>
         );
