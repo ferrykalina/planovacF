@@ -64,7 +64,7 @@
         const [bubbles, setBubbles]   = React.useState([]);
         const [spz, setSpz] = React.useState("");
         const [newCountry,setNewCountry] = React.useState("");
-        // autoRefresh zapnutý defaultně a kratší interval (5 s)
+        // Zapnuto defaultně, kratší interval = 3 s
         const [autoRefresh, setAutoRefresh] = React.useState(true);
 
         const byCol = React.useMemo(()=>{
@@ -73,9 +73,14 @@
           return map;
         },[countries,bubbles]);
 
+        // --- ČTENÍ (pull) – s anti-cache parametrem a hlavičkami ---
         const pull = async (wid) => {
           try {
-            const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {cache:'no-store'});
+            const url = `/api/planovac/${encodeURIComponent(wid)}?t=${Date.now()}`;
+            const r = await fetch(url, {
+              cache:'no-store',
+              headers: { 'Cache-Control': 'no-cache' }
+            });
             if(!r.ok){ console.error("GET", r.status); return; }
             const data = await r.json();
             if(Array.isArray(data.countries)) setCountries(data.countries);
@@ -83,25 +88,27 @@
           } catch(e){ console.error("GET failed", e); }
         };
 
+        // --- ZÁPIS (push) – s UTF-8 a okamžitým pull po uložení ---
         const push = async (wid, payload) => {
           try {
             const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
-              method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'},
+              method:'POST',
+              headers:{'Content-Type':'application/json; charset=utf-8'},
               body: JSON.stringify(payload)
             });
             if(!r.ok) console.error("POST", r.status);
-            // po uložení hned stáhni, aby ostatní uviděli změny co nejdřív
+            // po uložení hned stáhnout čerstvá data
             pull(wid);
           } catch(e){ console.error("POST failed", e); }
         };
 
-        // start: načti
+        // start: načti při změně workspace
         React.useEffect(()=>{ pull(workspace); },[workspace]);
 
-        // rychlý polling: každých 5 s (když je zaškrtnuto)
+        // rychlý polling: každé 3 s (pokud je zapnuto)
         React.useEffect(()=>{
           if(!autoRefresh) return;
-          const id = setInterval(()=>pull(workspace), 5000);
+          const id = setInterval(()=>pull(workspace), 3000);
           return ()=>clearInterval(id);
         },[workspace,autoRefresh]);
 
@@ -117,7 +124,7 @@
           };
         },[workspace]);
 
-        // auto-save (debounce 300 ms) + UTF-8 JSON headery již výše
+        // auto-save (debounce 300 ms)
         React.useEffect(()=>{
           const t = setTimeout(()=>push(workspace, { countries, bubbles }), 300);
           return ()=>clearTimeout(t);
@@ -160,7 +167,7 @@
               </label>
               <label style={{display:'inline-flex',alignItems:'center',gap:6}}>
                 <input type="checkbox" checked={autoRefresh} onChange={e=>setAutoRefresh(e.target.checked)} />
-                Auto-refresh 5 s
+                Auto-refresh 3 s
               </label>
             </div>
 
@@ -202,7 +209,7 @@
             <div style={{marginTop:16}}>
               <small>🧭 Přidej SPZ, vyber den přímo v bublině, připiš poznámku. Přetáhni do správného státu.  
               🔗 Pro oddělené tabule použij <code>?w=team-a</code>.  
-              ⏱️ Data se ukládají automaticky a sdílí se (polling 5 s).</small>
+              ⏱️ Data se ukládají automaticky a sdílí se (polling 3 s + anti-cache).</small>
             </div>
           </div>
         );
