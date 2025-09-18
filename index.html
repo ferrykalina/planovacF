@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="cs">
   <head>
-    <!-- DŮLEŽITÉ: UTF-8 musí být úplně nahoře -->
+    <!-- UTF-8 musí být úplně nahoře kvůli diakritice -->
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <title>Plánovač</title>
@@ -59,13 +59,19 @@
       function App(){
         const urlParams = new URLSearchParams(location.search);
         const initialW = urlParams.get("w") || "public-demo";
+
         const [workspace, setWorkspace] = React.useState(initialW);
         const [countries, setCountries] = React.useState(["CZ","DE","FR","IT","ES","NL","BE"]);
         const [bubbles, setBubbles]   = React.useState([]);
         const [spz, setSpz] = React.useState("");
         const [newCountry,setNewCountry] = React.useState("");
-        // Zapnuto defaultně, kratší interval = 3 s
-        const [autoRefresh, setAutoRefresh] = React.useState(true);
+        const [autoRefresh, setAutoRefresh] = React.useState(true); // zapnuto defaultně
+
+        // --- ochrana proti přepsání čerstvých lokálních změn ---
+        const lastLocalChangeRef = React.useRef(0); // čas poslední lokální změny
+        const lastServerStampRef = React.useRef(0); // poslední použitý serverový updated_at
+
+        const touchLocal = () => { lastLocalChangeRef.current = Date.now(); };
 
         const byCol = React.useMemo(()=>{
           const map = Object.fromEntries(countries.map(c=>[c,[]]));
@@ -73,54 +79,63 @@
           return map;
         },[countries,bubbles]);
 
-        // --- ČTENÍ (pull) – s anti-cache parametrem a hlavičkami ---
+        // --- ČTENÍ (pull) – no-cache + vyhodnocení čerstvosti ---
         const pull = async (wid) => {
           try {
+            // pokud jsme v posledních 1500 ms něco lokálně měnili, přeskoč pull
+            if (Date.now() - lastLocalChangeRef.current < 1500) return;
+
             const url = `/api/planovac/${encodeURIComponent(wid)}?t=${Date.now()}`;
-            const r = await fetch(url, {
-              cache:'no-store',
-              headers: { 'Cache-Control': 'no-cache' }
-            });
+            const r = await fetch(url, { cache:'no-store', headers: { 'Cache-Control':'no-cache', 'Pragma':'no-cache' } });
             if(!r.ok){ console.error("GET", r.status); return; }
             const data = await r.json();
+
+            const stamp = data && data.updated_at ? Date.parse(data.updated_at) : 0;
+            if (stamp && stamp < lastServerStampRef.current) return; // server má starší data → ignoruj
+
             if(Array.isArray(data.countries)) setCountries(data.countries);
-            if(Array.isArray(data.bubbles)) setBubbles(data.bubbles);
+            if(Array.isArray(data.bubbles))   setBubbles(data.bubbles);
+            if (stamp) lastServerStampRef.current = stamp;
           } catch(e){ console.error("GET failed", e); }
         };
 
-        // --- ZÁPIS (push) – s UTF-8 a okamžitým pull po uložení ---
+        // --- ZÁPIS (push) – UTF-8 + okamžitý pull po uložení ---
         const push = async (wid, payload) => {
           try {
+            touchLocal();
             const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
               method:'POST',
               headers:{'Content-Type':'application/json; charset=utf-8'},
               body: JSON.stringify(payload)
             });
             if(!r.ok) console.error("POST", r.status);
-            // po uložení hned stáhnout čerstvá data
-            pull(wid);
+            // po uložení hned stáhneme čerstvá data (už s novým updated_at)
+            await pull(wid);
           } catch(e){ console.error("POST failed", e); }
         };
 
         // start: načti při změně workspace
         React.useEffect(()=>{ pull(workspace); },[workspace]);
 
-        // rychlý polling: každé 3 s (pokud je zapnuto)
+        // polling: každé 3 s (když je zapnuto)
         React.useEffect(()=>{
           if(!autoRefresh) return;
           const id = setInterval(()=>pull(workspace), 3000);
           return ()=>clearInterval(id);
         },[workspace,autoRefresh]);
 
-        // také stáhni při návratu do okna/záložky
+        // pull při návratu do okna/záložky a při scrollu
         React.useEffect(()=>{
           const onFocus = ()=>pull(workspace);
           const onVisible = ()=>{ if(document.visibilityState==='visible') pull(workspace); };
+          const onScroll = ()=>pull(workspace);
           window.addEventListener('focus', onFocus);
           document.addEventListener('visibilitychange', onVisible);
+          window.addEventListener('scroll', onScroll, { passive:true });
           return ()=>{
             window.removeEventListener('focus', onFocus);
             document.removeEventListener('visibilitychange', onVisible);
+            window.removeEventListener('scroll', onScroll);
           };
         },[workspace]);
 
@@ -130,27 +145,32 @@
           return ()=>clearTimeout(t);
         },[countries,bubbles,workspace]);
 
+        // --- mutátory (všechny volají touchLocal) ---
         const addSpz = () => {
           const label = (spz||"").trim();
           if(!label) return;
           const id = "spz-" + Math.random().toString(36).slice(2,8);
+          touchLocal();
           setBubbles(prev => [...prev, { id, label, type:'spz', column: countries[0]||"CZ", day:"", note:"" }]);
           setSpz("");
         };
+
         const addCountry = () => {
           const code = (newCountry||"").trim().toUpperCase();
           if(!code) return;
           if(countries.includes(code)){ setNewCountry(""); return; }
+          touchLocal();
           setCountries(prev => [...prev, code]);
           setNewCountry("");
         };
 
-        const onChangeNote = (id, text) => setBubbles(prev => prev.map(b=>b.id===id?{...b,note:text}:b));
-        const onChangeDay  = (id, day)  => setBubbles(prev => prev.map(b=>b.id===id?{...b,day:day}:b));
-        const onDeleteDay  = (id)       => setBubbles(prev => prev.map(b=>b.id===id?{...b,day:""}:b));
+        const onChangeNote = (id, text) => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,note:text}:b)); };
+        const onChangeDay  = (id, day)  => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:day}:b)); };
+        const onDeleteDay  = (id)       => { touchLocal(); setBubbles(prev => prev.map(b=>b.id===id?{...b,day:""}:b)); };
         const onDragStart  = (e, id)    => e.dataTransfer.setData("text/plain", id);
         const onDropTo     = (e, code)  => {
           const id = e.dataTransfer.getData("text/plain"); if(!id) return;
+          touchLocal();
           setBubbles(prev => prev.map(b=>b.id===id?{...b,column:code}:b));
         };
 
@@ -158,7 +178,7 @@
           <div className="wrap">
             <header style={{textAlign:'center', marginBottom:12}}>
               <h1>Plánovač</h1>
-              <small>Veřejný online dokument – sdílej URL, kdokoliv může upravovat.</small>
+              <small>Veřejný online dokument – sdílej URL (stejné <code>?w=...</code>), všichni uvidí změny.</small>
             </header>
 
             <div className="toolbar">
@@ -194,22 +214,22 @@
               {countries.map(code => (
                 <div key={code} className="col" onDragOver={e=>e.preventDefault()} onDrop={(e)=>onDropTo(e, code)}>
                   <h3>{code}</h3>
-                  { (byCol[code]||[]).map(b => (
+                  {(byCol[code]||[]).map(b => (
                     <Bubble key={b.id} b={b}
                       onChangeNote={onChangeNote}
                       onChangeDay={onChangeDay}
                       onDeleteDay={onDeleteDay}
                       onDragStart={onDragStart}
                     />
-                  )) }
+                  ))}
                 </div>
               ))}
             </div>
 
             <div style={{marginTop:16}}>
               <small>🧭 Přidej SPZ, vyber den přímo v bublině, připiš poznámku. Přetáhni do správného státu.  
-              🔗 Pro oddělené tabule použij <code>?w=team-a</code>.  
-              ⏱️ Data se ukládají automaticky a sdílí se (polling 3 s + anti-cache).</small>
+              🔗 Pro oddělené tabule použij stejné <code>?w=team-a</code>.  
+              ⏱️ Sdílení běží (polling 3 s, anti-cache, ochrana proti přepsání).</small>
             </div>
           </div>
         );
