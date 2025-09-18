@@ -1,8 +1,10 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="cs">
   <head>
-    <meta charset="utf-8" />
-    <title>PlĂˇnovaÄŤ</title>
+    <!-- DŮLEŽITÉ: UTF-8 musí být úplně nahoře -->
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Plánovač</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7fb;margin:0;padding:24px;}
@@ -33,21 +35,21 @@
     <div class="wrap" id="root"></div>
 
     <script type="text/babel">
-      const DAY_LABELS = ["Po","Ăšt","St","ÄŚt","PĂˇ","So","Ne"];
+      const DAY_LABELS = ["Po","Út","St","Čt","Pá","So","Ne"];
 
       function Bubble({b,onChangeNote,onChangeDay,onDeleteDay,onDragStart}) {
         return (
-          <div className="bubble draggable" draggable onDragStart={(e)=>onDragStart(e,b.id)} title="PoznĂˇmka jde dvojklikem oznaÄŤit a pĹ™epsat">
+          <div className="bubble draggable" draggable onDragStart={(e)=>onDragStart(e,b.id)} title="Poznámka jde dvojklikem označit a přepsat">
             <div className="row">
               <small>SPZ</small><strong>{b.label}</strong>
               <select value={b.day || ""} onChange={(e)=>onChangeDay(b.id, e.target.value || "")}>
                 <option value="" disabled>Den</option>
                 {DAY_LABELS.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
-              {b.day ? <button onClick={()=>onDeleteDay(b.id)}>Ă—</button> : null}
+              {b.day ? <button onClick={()=>onDeleteDay(b.id)}>×</button> : null}
             </div>
             <div className="row" style={{marginTop:6}}>
-              <input className="note" type="text" value={b.note || ""} placeholder="PoznĂˇmkaâ€¦"
+              <input className="note" type="text" value={b.note || ""} placeholder="Poznámka…"
                      onFocus={(e)=>e.target.select()} onChange={(e)=>onChangeNote(b.id,e.target.value)} />
             </div>
           </div>
@@ -62,7 +64,8 @@
         const [bubbles, setBubbles]   = React.useState([]);
         const [spz, setSpz] = React.useState("");
         const [newCountry,setNewCountry] = React.useState("");
-        const [autoRefresh, setAutoRefresh] = React.useState(false);
+        // autoRefresh zapnutý defaultně a kratší interval (5 s)
+        const [autoRefresh, setAutoRefresh] = React.useState(true);
 
         const byCol = React.useMemo(()=>{
           const map = Object.fromEntries(countries.map(c=>[c,[]]));
@@ -71,26 +74,50 @@
         },[countries,bubbles]);
 
         const pull = async (wid) => {
-          const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {cache:'no-store'});
-          if(!r.ok){ console.error("GET", r.status); return; }
-          const data = await r.json();
-          if(Array.isArray(data.countries)) setCountries(data.countries);
-          if(Array.isArray(data.bubbles)) setBubbles(data.bubbles);
-        };
-        const push = async (wid, payload) => {
-          const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
-            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-          });
-          if(!r.ok) console.error("POST", r.status);
+          try {
+            const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {cache:'no-store'});
+            if(!r.ok){ console.error("GET", r.status); return; }
+            const data = await r.json();
+            if(Array.isArray(data.countries)) setCountries(data.countries);
+            if(Array.isArray(data.bubbles)) setBubbles(data.bubbles);
+          } catch(e){ console.error("GET failed", e); }
         };
 
+        const push = async (wid, payload) => {
+          try {
+            const r = await fetch(`/api/planovac/${encodeURIComponent(wid)}`, {
+              method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'},
+              body: JSON.stringify(payload)
+            });
+            if(!r.ok) console.error("POST", r.status);
+            // po uložení hned stáhni, aby ostatní uviděli změny co nejdřív
+            pull(wid);
+          } catch(e){ console.error("POST failed", e); }
+        };
+
+        // start: načti
         React.useEffect(()=>{ pull(workspace); },[workspace]);
+
+        // rychlý polling: každých 5 s (když je zaškrtnuto)
         React.useEffect(()=>{
           if(!autoRefresh) return;
-          const id = setInterval(()=>pull(workspace), 60000);
+          const id = setInterval(()=>pull(workspace), 5000);
           return ()=>clearInterval(id);
         },[workspace,autoRefresh]);
 
+        // také stáhni při návratu do okna/záložky
+        React.useEffect(()=>{
+          const onFocus = ()=>pull(workspace);
+          const onVisible = ()=>{ if(document.visibilityState==='visible') pull(workspace); };
+          window.addEventListener('focus', onFocus);
+          document.addEventListener('visibilitychange', onVisible);
+          return ()=>{
+            window.removeEventListener('focus', onFocus);
+            document.removeEventListener('visibilitychange', onVisible);
+          };
+        },[workspace]);
+
+        // auto-save (debounce 300 ms) + UTF-8 JSON headery již výše
         React.useEffect(()=>{
           const t = setTimeout(()=>push(workspace, { countries, bubbles }), 300);
           return ()=>clearTimeout(t);
@@ -123,36 +150,36 @@
         return (
           <div className="wrap">
             <header style={{textAlign:'center', marginBottom:12}}>
-              <h1>PlĂˇnovaÄŤ</h1>
-              <small>VeĹ™ejnĂ˝ online dokument â€“ sdĂ­lej URL, kdokoliv mĹŻĹľe upravovat.</small>
+              <h1>Plánovač</h1>
+              <small>Veřejný online dokument – sdílej URL, kdokoliv může upravovat.</small>
             </header>
 
             <div className="toolbar">
-              <label>PracovnĂ­ prostor (ID): 
+              <label>Pracovní prostor (ID):
                 <input type="text" value={workspace} onChange={e=>setWorkspace(e.target.value.trim()||"public-demo")} style={{marginLeft:6}} />
               </label>
               <label style={{display:'inline-flex',alignItems:'center',gap:6}}>
                 <input type="checkbox" checked={autoRefresh} onChange={e=>setAutoRefresh(e.target.checked)} />
-                Auto-refresh 60 s
+                Auto-refresh 5 s
               </label>
             </div>
 
             <div className="grid">
               <div className="card">
-                <div style={{fontWeight:600, marginBottom:8}}>PĹ™idat SPZ</div>
+                <div style={{fontWeight:600, marginBottom:8}}>Přidat SPZ</div>
                 <div className="row">
-                  <input type="text" value={spz} onChange={e=>setSpz(e.target.value)} placeholder="SPZ (pĂ­smena i ÄŤĂ­sla)" />
-                  <button onClick={addSpz}>PĹ™idat SPZ</button>
+                  <input type="text" value={spz} onChange={e=>setSpz(e.target.value)} placeholder="SPZ (písmena i čísla)" />
+                  <button onClick={addSpz}>Přidat SPZ</button>
                 </div>
               </div>
 
               <div className="card">
-                <div style={{fontWeight:600, marginBottom:8}}>PĹ™idat stĂˇt (sloupec)</div>
+                <div style={{fontWeight:600, marginBottom:8}}>Přidat stát (sloupec)</div>
                 <div className="row">
-                  <input type="text" value={newCountry} onChange={e=>setNewCountry(e.target.value.toUpperCase())} placeholder="NapĹ™. PL, AT, SK" />
-                  <button onClick={addCountry}>PĹ™idat stĂˇt</button>
+                  <input type="text" value={newCountry} onChange={e=>setNewCountry(e.target.value.toUpperCase())} placeholder="Např. PL, AT, SK" />
+                  <button onClick={addCountry}>Přidat stát</button>
                 </div>
-                <small>Sloupec pro pĹ™esouvĂˇnĂ­ SPZ (dvoupĂ­smennĂˇ zkratka).</small>
+                <small>Sloupec pro přesouvání SPZ (dvoupísmenná zkratka).</small>
               </div>
             </div>
 
@@ -173,9 +200,9 @@
             </div>
 
             <div style={{marginTop:16}}>
-              <small>đź§­ PĹ™idej SPZ, vyber den pĹ™Ă­mo v bublinÄ›, pĹ™ipiĹˇ poznĂˇmku. PĹ™etĂˇhni do sprĂˇvnĂ©ho stĂˇtu.  
-              đź”— Pro oddÄ›lenĂ© tabule pouĹľij <code>?w=team-a</code>.  
-              âŹ±ď¸Ź Data se uklĂˇdajĂ­ automaticky.</small>
+              <small>🧭 Přidej SPZ, vyber den přímo v bublině, připiš poznámku. Přetáhni do správného státu.  
+              🔗 Pro oddělené tabule použij <code>?w=team-a</code>.  
+              ⏱️ Data se ukládají automaticky a sdílí se (polling 5 s).</small>
             </div>
           </div>
         );
